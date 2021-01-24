@@ -1,0 +1,64 @@
+library(tidyverse)
+library(purrr)
+library(curl)
+library(httr)
+library(rvest)
+
+#https://www.racing-reference.info/loopdata/2020-01/W
+#Cup Series = W, xFinity = B, Trucks = C
+#Making the groupings of URL variables. Currently seasons 2010-2020, 36 races in each season
+#Cup back to 2005, Xfinity and Trucks to 2007
+year <- c("2007","2008","2009","2010","2011","2012", "2013", "2014", "2015", "2016", "2017", "2018",
+        "2019","2020")
+
+race <- c("01","02","03","04","05","06","07","08","09","10","11","12","13","14","15","16",
+          "17","18","19","20","21","22","23","24","25","26","27","28","29","30",
+          "31","32","33","34","35","36")
+#Shows What Factors to Change in URL
+url <- "https://www.racing-reference.info/loopdata/{year}-{race}/B"
+
+#Runs RACE in URL through all possible combinations
+url2 <- map(.x =c(race),
+            .f = function(x){gsub(x = url, pattern ="\\{race\\}",
+                                  replacement = x)}) %>%
+        unlist
+#Takes Previous URL2 and looks at all YEAR combinations
+url3 <- map(.x =c(year),
+            .f = function(x){gsub(x = url2, pattern ="\\{year\\}",
+                                  replacement = x)}) %>%
+  unlist
+
+#This creates an object of the indicies of active URLs
+check_link <- sapply(url3, http_error) %>%
+  as.data.frame()
+
+#This eliminates inactive URLs
+link_hit_index <- which(check_link == FALSE)
+
+#After filtering out inactive URLs and keeping active ones. Save as RDS
+url_final <- url3[link_hit_index]
+saveRDS(url_final,"activeURLs_NASCAR.rds")
+
+data <- map_dfr(.x = url_final,
+                .f = function(x){Sys.sleep(5);cat(1);
+                df <- read_html(curl(x,handle =
+curl :: new_handle("useragent" = "Mozilla/5.0"))) %>%
+                  html_nodes("table") %>%
+                  html_table(fill = T) %>%
+                  .[[7]]%>%
+                  setNames(paste0(c("Driver", "Start","Mid Race","Finish", "High Pos.", 
+                                     "Low Pos.", "Avg. Pos.", "Pass Diff.", 
+                                     "Green Flag Passes", "Green Flag Times Passed", 
+                                     "Quality Passes", "Pct. Quality Passes", "Fastest Lap",
+                                     "Top 15 Laps", "Pct. Top 15 Laps", "Laps Led", 
+                                     "Pct. Laps Led", "Total Laps", "Driver Rating")))
+#https://www.racing-reference.info/loopdata/2020-01/W
+
+df$year <- str_extract(string = x, pattern = "(?<=loopdata\\/)\\d{4}")
+df$race <- str_extract(string = x, pattern = "(?<=\\-)\\d{2}")
+df$raceID <- paste(df$race, df$year, sep = "_")
+
+df
+})
+
+write.csv2(data,"XFinity07_20.csv")
