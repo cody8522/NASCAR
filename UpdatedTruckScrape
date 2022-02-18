@@ -61,7 +61,7 @@ datat <- map_dfr(.x = url_final,
                    
                    df
                  })
-data4 <- datac %>%
+data4 <- datat %>%
   filter(!grepl('Loop', Driver))%>%
   filter(!grepl('Driver', Driver))%>%
   filter(Driver != "")%>%
