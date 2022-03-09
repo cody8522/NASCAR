@@ -1,0 +1,167 @@
+library(tidyverse)
+library(purrr)
+library(curl)
+library(httr)
+library(rvest)
+library(ggplot2)
+library(readxl)
+library(tidymodels)
+library(ranger)
+
+
+Cup = read.csv("Cup2005_2020.csv",sep = ";")
+LO21 = read.csv("Cup21.csv", sep = ";")
+Updated = bind_rows(Cup, LO21)
+Updated$Fastest.Lap.Pct = ((Updated$Fastest.Lap / Updated$Total.Laps) *100)
+round(Updated$Fastest.Lap.Pct, digits = 2)
+Updated$race_ID = paste(substr(Updated$raceID, 4, 7), "_", substr(Updated$raceID, 0, 2), sep = "")
+
+
+Schedule = read.csv("CupSchedule.csv")
+
+CupData <- merge(Updated, Schedule)
+
+CupData <- CupData %>%
+  group_by(Driver, race_ID) %>%
+  arrange(race_ID, Finish)%>%
+  select(Driver, year, race, race_ID,Track,TrackType,Start,Finish, Avg..Pos.,Pass.Diff.,
+         Pct..Quality.Passes,Pct..Top.15.Laps,Pct..Laps.Led,Fastest.Lap.Pct,
+         Total.Laps,Driver.Rating)
+
+S2 <- CupData %>%
+  group_by(Driver) %>%
+  arrange(Driver, race_ID)%>%
+  filter(TrackType == 'S2')%>%
+  select(Driver, race_ID, year, race, Track, Start, Finish, Avg..Pos., Pass.Diff.,
+         Pct..Quality.Passes,Pct..Top.15.Laps,Pct..Laps.Led,Fastest.Lap.Pct,
+         Total.Laps,Driver.Rating)%>%
+  mutate(race_count = 1)%>%
+  mutate(race_number = cumsum(race_count))%>%
+  mutate(avg_fin = cumsum(Finish)/race_number)%>%
+  mutate(lag_avg_fin = lag(avg_fin))%>%
+  mutate(avg_DR = cumsum(Driver.Rating)/race_number)%>%
+  mutate(lag_avg_DR = lag(avg_DR))%>%
+  mutate(avg_pos = cumsum(Avg..Pos.)/race_number)%>%
+  mutate(lag_avg_pos = lag(avg_pos))%>%
+  mutate(avg_LLP = cumsum(Pct..Laps.Led)/race_number)%>%
+  mutate(lag_avg_LLP = lag(avg_LLP))%>%
+  mutate(avg_FLP = cumsum(Fastest.Lap.Pct)/race_number)%>%
+  mutate(lag_avg_FLP = lag(avg_FLP))%>%
+  mutate(avg_PQP = cumsum(Pct..Quality.Passes)/race_number)%>%
+  mutate(lag_avg_PQP = lag(avg_PQP))
+
+
+S2_model <- S2 %>%
+  group_by(Driver)%>%
+  arrange(Driver, race_ID)%>%
+  select(Driver, race_ID, year, race, Track, Start, Finish, 
+         lag_avg_fin, lag_avg_DR, lag_avg_pos, lag_avg_LLP, lag_avg_FLP, lag_avg_PQP)%>%
+  filter(!is.na(lag_avg_fin), !is.na(lag_avg_FLP))
+
+
+set.seed(124)
+S2_split <- S2_model %>%
+  initial_split(strata = year)
+
+S2_train <- training(S2_split)
+S2_test <- testing(S2_split)
+
+lm_spec_S2 <- linear_reg() %>%
+  set_engine(engine = "lm")
+
+lm_fit_S2 <- lm_spec_S2 %>%
+  fit(Finish ~ Start + lag_avg_fin + lag_avg_DR + lag_avg_pos + lag_avg_LLP + lag_avg_FLP,
+      data = S2_train)
+
+rf_spec_S2 <- rand_forest(mode = "regression")%>%
+  set_engine("ranger")
+
+rf_fit_S2 <- rf_spec_S2 %>%
+  fit(Finish ~ Start + lag_avg_fin + lag_avg_DR + lag_avg_pos + lag_avg_LLP + lag_avg_FLP,
+      data = S2_train)
+
+results_train_S2 <- lm_fit_S2 %>%
+  predict(new_data = S2_train) %>%
+  mutate(truth = S2_train$Finish,
+         model = "lm",
+         Driver = S2_train$Driver,
+         race_ID = S2_train$race_ID)%>%
+  bind_rows(rf_fit_S2 %>%
+              predict(new_data = S2_train) %>%
+              mutate(truth = S2_train$Finish,
+                     model = "rf",
+                     Driver = S2_train$Driver,
+                     race_ID = S2_train$race_ID))
+
+results_test_S2 <- lm_fit_S2 %>%
+  predict(new_data = S2_test) %>%
+  mutate(truth = S2_test$Finish,
+         model = "lm",
+         Driver = S2_test$Driver,
+         race_ID = S2_test$race_ID)%>%
+  bind_rows(rf_fit_S2 %>%
+              predict(new_data = S2_test) %>%
+              mutate(truth = S2_test$Finish,
+                     model = "rf",
+                     Driver = S2_test$Driver,
+                     race_ID = S2_test$race_ID))
+
+results_train_S2 %>%
+  group_by(model)%>%
+  rmse(truth = truth, estimate = .pred)
+
+results_test_S2  %>%
+  group_by(model)%>%
+  rmse(truth = truth, estimate = .pred)
+
+results_test_S2 %>%
+  mutate(train = "testing")%>%
+  bind_rows(results_train_S2 %>%
+              mutate(train = "training"))%>%
+  filter(model =="rf")%>%
+  ggplot(aes(truth, .pred)) + 
+  geom_abline(lty =2, color = "gray80")+
+  geom_point(alpha = 0.5, color = "blue") +
+  facet_wrap(~train)
+
+analysis_S2 <- results_test_S2 %>%
+  bind_rows(results_train_S2)%>%
+  filter(model == "rf")%>%
+  arrange(race_ID, .pred)%>%
+  group_by(race_ID)%>%
+  mutate(pred_finish = order(.pred, race_ID, decreasing = FALSE))
+
+write.csv(analysis_S2, file = "rf_S2_results.csv")
+
+##Predict New Race
+Next_Race_1 <- S2 %>%
+  group_by(Driver)%>%
+  summarize(race_number = last(race_number), lag_avg_fin= last(avg_fin), lag_avg_DR = last(avg_DR), 
+            lag_avg_pos = last(avg_pos), lag_avg_LLP = last(avg_LLP), lag_avg_FLP = last(avg_FLP))%>%
+  arrange(lag_avg_fin)
+
+Next_Race_2 = read.csv("Phoenix22.csv")
+
+Next_Race <- Next_Race_2 %>%
+  left_join(Next_Race_1, by = c('Driver' = 'Driver'))%>%
+  filter(!is.na(lag_avg_FLP))%>%
+  arrange(lag_avg_fin)
+
+Next_Race_Pred <- lm_fit_S2 %>%
+  predict(new_data = Next_Race) %>%
+  mutate(model = "lm",
+         driver = Next_Race$Driver)%>%
+  bind_rows(rf_fit_S2 %>%
+              predict(new_data = Next_Race) %>%
+              mutate(model = "rf",
+                     driver = Next_Race$Driver))%>%
+  arrange(.pred)%>%
+  filter(model == "lm")%>%
+  left_join(Next_Race, by = c('driver' = 'Driver'))%>%
+  arrange(.pred)
+
+S2_model %>% lm(formula = Finish ~ Start + lag_avg_fin + lag_avg_DR +
+                  lag_avg_pos + lag_avg_LLP + lag_avg_FLP) %>% summary()
+
+write.csv(Next_Race_Pred, file = "Cup22Vegas.csv")
+
