@@ -1,0 +1,112 @@
+library(tidyverse)
+library(purrr)
+library(curl)
+library(httr)
+library(rvest)
+library(ggplot2)
+library(readxl)
+library(tidymodels)
+library(ranger)
+
+
+truck = read.csv("Trucks2007_2020.csv",sep = ";")
+RC21t = read.csv("Truck21.csv", sep = ";")
+Updatedt = bind_rows(truck, RC21t)
+Updatedt$Fastest.Lap.Pct = ((Updatedt$Fastest.Lap / Updatedt$Total.Laps) *100)
+round(Updatedt$Fastest.Lap.Pct, digits = 2)
+Updatedt$race_ID = paste(substr(Updatedt$raceID, 4, 7), "_", substr(Updatedt$raceID, 0, 2), sep = "")
+
+tSchedule = read.csv("TruckSchedule.csv")
+
+tData <- merge(Updatedt, tSchedule)
+
+tData <- tData %>%
+  group_by(Driver, race_ID) %>%
+  arrange(race_ID, Finish)%>%
+  select(Driver, year, race, race_ID,Track,TrackType,Start,Finish, Avg..Pos.,Pass.Diff.,
+         Pct..Quality.Passes,Pct..Top.15.Laps,Pct..Laps.Led,Fastest.Lap.Pct,
+         Total.Laps,Driver.Rating)%>%
+  mutate(series = "Trucks")%>%
+  filter(Total.Laps != 0)
+####################################################################################################
+## import xfinity data
+
+xfin = read.csv("Xfinity2007_2020.csv",sep = ";")
+S221x = read.csv("Xfinity21.csv", sep = ";")
+s222x = read.csv("Xfinity2022.csv")
+Updatedx = bind_rows(xfin, S221x, s222x)
+Updatedx$Fastest.Lap.Pct = ((Updatedx$Fastest.Lap / Updatedx$Total.Laps) *100)
+round(Updatedx$Fastest.Lap.Pct, digits = 2)
+Updatedx$race_ID = paste(substr(Updatedx$raceID, 4, 7), "_", substr(Updatedx$raceID, 0, 2), sep = "")
+
+xSchedule = read.csv("XfinitySchedule.csv")
+
+xData <- merge(Updatedx, xSchedule)
+
+xData <- xData %>%
+  group_by(Driver, race_ID) %>%
+  arrange(race_ID, Finish)%>%
+  select(Driver, year, race, race_ID,Track,TrackType,Start,Finish, Avg..Pos.,Pass.Diff.,
+         Pct..Quality.Passes,Pct..Top.15.Laps,Pct..Laps.Led,Fastest.Lap.Pct,
+         Total.Laps,Driver.Rating)%>%
+  mutate(series = "Xfinity")%>%
+  filter(Total.Laps != 0)
+#####################################################################################################
+Cup = read.csv("Cup2005_2020.csv",sep = ";")
+RC21 = read.csv("Cup21.csv", sep = ";")
+Updated = bind_rows(Cup, RC21)
+Updated$Fastest.Lap.Pct = ((Updated$Fastest.Lap / Updated$Total.Laps) *100)
+round(Updated$Fastest.Lap.Pct, digits = 2)
+Updated$race_ID = paste(substr(Updated$raceID, 4, 7), "_", substr(Updated$raceID, 0, 2), sep = "")
+
+
+Schedule = read.csv("CupSchedule.csv")
+
+CupData <- merge(Updated, Schedule)
+
+CupData <- CupData %>%
+  group_by(Driver, race_ID) %>%
+  arrange(race_ID, Finish)%>%
+  select(Driver, year, race, race_ID,Track,TrackType,Start,Finish, Avg..Pos.,Pass.Diff.,
+         Pct..Quality.Passes,Pct..Top.15.Laps,Pct..Laps.Led,Fastest.Lap.Pct,
+         Total.Laps,Driver.Rating)%>%
+  mutate(series = "Cup")%>%
+  filter(Total.Laps != 0)
+
+############################
+Cup_Field = read.csv("Nashville22.csv")
+Truck_Field = read.csv("Kansas22Trucks2.csv")
+Xfin_Field = read.csv("Kansas22x.csv")
+
+Field <- Cup_Field %>%
+  bind_rows(Truck_Field, Xfin_Field)%>%
+  select(Driver)%>%
+  arrange(Driver)
+
+###########################
+
+Data <- tData %>%
+  bind_rows(CupData, xData)
+
+ratings <- Data %>%
+  group_by(Driver, year, series)%>%
+  select(Driver, year,series, race_ID, Track, TrackType,  Finish, Avg..Pos., Driver.Rating)%>%
+  mutate(avg_DR = mean(Driver.Rating), ratingAA = Driver.Rating / avg_DR)%>%
+  ungroup()%>%
+  group_by(Driver, Track, series)%>%
+  summarize(Driver = last(Driver), Track = last(Track), ratingAA = mean(ratingAA), DriverRating = mean(Driver.Rating), races = n())%>%
+  filter(Track == "Phoenix")%>%
+  arrange(-ratingAA)
+
+field_ratings <- Cup_Field %>%
+  left_join(ratings, by = c("Driver" = "Driver"))%>%
+  filter(!is.na(ratingAA))%>%
+  arrange(-ratingAA)%>%
+  ungroup()%>%
+  group_by(Driver)%>%
+  select(Driver, ratingAA, DriverRating, races)%>%
+  summarize(Driver = last(Driver), ratingAA = mean(ratingAA), DriverRating = last(DriverRating), races = sum(races))%>%
+  arrange(-ratingAA)
+
+
+
